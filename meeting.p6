@@ -57,8 +57,9 @@ class Appointment {
 
 sub MAIN(Str:D :$calendar, Int:D :$interval = 60) {
     my Channel:D $channel = Channel.new;
+    my Str:D @calendar = $calendar.split(",");
 
-    start-background($calendar, $channel, $interval);
+    start-background(@calendar, $channel, $interval);
 
     time-note "Fetching meetings from Google";
 
@@ -117,7 +118,7 @@ sub MAIN(Str:D :$calendar, Int:D :$interval = 60) {
     }
 }
 
-sub start-background(Str:D $calendar, Channel:D $channel, Int:D $interval --> Nil) {
+sub start-background(Str:D @calendar, Channel:D $channel, Int:D $interval --> Nil) {
     # Start ticks
     start {
         my $now = DateTime.now;
@@ -133,12 +134,12 @@ sub start-background(Str:D $calendar, Channel:D $channel, Int:D $interval --> Ni
 
     # Google Monitor
     start {
-        my @appointments = get-appointments-from-google($calendar)<>;
+        my @appointments = get-appointments-from-google(@calendar)<>;
         $channel.send(@appointments);
         
         react {
             whenever Supply.interval($interval) {
-                @appointments = get-appointments-from-google($calendar)<>;
+                @appointments = get-appointments-from-google(@calendar)<>;
                 $channel.send(@appointments);
             }
         }
@@ -276,27 +277,28 @@ sub get-camera(-->Bool:D) {
     return False;
 }
 
-sub get-appointments-from-google(Str:D $calendar) {
+sub get-appointments-from-google(Str:D @calendar) {
     my $now      = DateTime.now;
     my $offset   = S/^.* <?before <[ + \- ]> >// with ~$now;
     my $tomorrow = $now.later(:1day);
 
-    my @gcal = @GCAL-CMD.map: { $^a eq '_CALENDAR_' ?? $calendar !! $^a };
-
-    my $proc = run @gcal, $now.yyyy-mm-dd, $tomorrow.yyyy-mm-dd, :out;
-    my @appts = $proc.out.slurp(:close).lines;
-
     my @output = gather {
-        for @appts -> $appt-line {
-            my ($startdt, $starttm, $enddt, $endtm, $desc) = $appt-line.split("\t");
-            my $start = DateTime.new("{$startdt}T{$starttm}:00{$offset}");
-            my $end   = DateTime.new("{$enddt}T{$endtm}:00{$offset}");
+        for @calendar -> $calendar {
+            my @gcal = @GCAL-CMD.map: { $^a eq '_CALENDAR_' ?? $calendar !! $^a };
 
-            take Appointment.new( :$start, :$end, :description($desc) );
+            my $proc = run @gcal, $now.yyyy-mm-dd, $tomorrow.yyyy-mm-dd, :out;
+            my @appts = $proc.out.slurp(:close).lines;
+            for @appts -> $appt-line {
+                my ($startdt, $starttm, $enddt, $endtm, $desc) = $appt-line.split("\t");
+                my $start = DateTime.new("{$startdt}T{$starttm}:00{$offset}");
+                my $end   = DateTime.new("{$enddt}T{$endtm}:00{$offset}");
+
+                take Appointment.new( :$start, :$end, :description($desc) );
+            }
         }
     }
 
-    return @output;
+    return @output.sort.unique;
 }
 
 sub light-red()   { light-command(20,  0, 0) }
